@@ -12,7 +12,7 @@ Set-Location -LiteralPath $repo
 $build = [IO.Path]::GetFullPath((Join-Path $repo $BuildDirectory))
 $output = [IO.Path]::GetFullPath((Join-Path $repo $OutputDirectory))
 $templates = Join-Path $repo 'packaging/HallOfMeat'
-$tests = @('dingosdk_slam_tests', 'dingosdk_slam_visuals_tests', 'dingosdk_slam_replay_tests', 'dingosdk_slam_settings_tests',
+$tests = @('dingosdk_slam_tests', 'dingosdk_slam_capture_tests', 'dingosdk_slam_visuals_tests', 'dingosdk_slam_replay_tests', 'dingosdk_slam_settings_tests',
     'dingosdk_slam_bail_tests', 'dingosdk_slam_retry_tests')
 if (-not $SkipBuild) {
     & cmake --preset vs2022-x64 -B $build "-DDINGOSDK_VERSION=$Version-hall-of-meat" `
