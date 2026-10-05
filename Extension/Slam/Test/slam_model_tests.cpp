@@ -804,7 +804,7 @@ void saved_personal_bests() {
     constexpr std::string_view map="levels/test/slam";
     const auto document=encode_personal_best(map,config,best);
     check(decode_personal_best(document,map,config)==std::optional(best),"Completed personal bests survive a saved-state round trip");
-    auto higher_bruise=config; higher_bruise.scoring.bruise_threshold=100;
+    auto higher_bruise=config; higher_bruise.scoring.bruise_threshold=50;
     check(personal_best_key(map,config)!=personal_best_key(map,higher_bruise) &&
         !decode_personal_best(document,map,higher_bruise),"Changing injury rules cannot mix personal-best records");
     auto different=config; different.scoring.chain_step=.5f;
@@ -824,7 +824,9 @@ void saved_personal_bests() {
 void saved_damage_thresholds() {
     const Config defaults;
     constexpr std::string_view legacy=R"({"version":1,"kind":0,"target":5000,"rules":[10,500,100,50,25,0.25,1.5,160,225]})";
-    check(decode_config(legacy)==std::optional(defaults) && encode_config(defaults).find("bruiseThreshold")==std::string::npos,
+    // A save keeps the thresholds it was made with (160/225), whatever today's defaults are.
+    auto legacy_rules=defaults; legacy_rules.scoring.head_fracture=160; legacy_rules.scoring.limb_fracture=225;
+    check(decode_config(legacy)==std::optional(legacy_rules) && encode_config(defaults).find("bruiseThreshold")==std::string::npos,
         "Older scoring saves retain any-damage bruises and their original personal-best identity");
     Config configured; configured.scoring.bruise_threshold=120;
     configured.scoring.head_fracture=500; configured.scoring.limb_fracture=800;
