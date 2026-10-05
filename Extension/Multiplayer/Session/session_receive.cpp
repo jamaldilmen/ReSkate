@@ -183,13 +183,13 @@ void apply_roster(Session &s, const Packet &p, std::uint64_t now) {
 bool accept_data(Peer &peer, const Packet &p, std::uint64_t now) {
     bool accepted{};
     if (p.kind == PacketKind::cosmetics) {
-        accepted = peer.appearance.push(p);
+        accepted = peer.outfit_budget.accept(now) && peer.appearance.push(p);
         if (accepted) {
             peer.cosmetic_packet = encode_wire(p);
             ++peer.cosmetic_revision;
         }
     } else if (p.kind == PacketKind::audio)
-        accepted = peer.audio.push(p, now);
+        accepted = peer.sound_budget.accept(now, p.audio.size()) && peer.audio.push(p, now);
     else if (p.kind == PacketKind::pose)
         accepted = peer.poses.push_validated(p, now);
     if (accepted) {
@@ -222,6 +222,7 @@ bool accept_data(Peer &peer, Packet &&p, std::uint64_t now) {
 }
 void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
     s.network_now = now;
+    s.join_backoff.prune(now);
     trim_slots(s);
     if (world_playing(s, local)) s.local_root = local.pose.root;
     s.transport.poll();
@@ -264,6 +265,17 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
         stop(s, s.transport.status().detail);
         return;
     }
+    // The backend's bans (reskate_banned) arrive while a session runs: a banned player stops
+    // hosting theirs, and nobody stays with a banned host. A banned guest is for the host or
+    // the server to turn away (below, and Host::tick), which a server may choose not to.
+    if (s.mode == Mode::host && reskate_banned(s.transport.status().local_id)) {
+        stop(s, std::string(banned_notice));
+        return;
+    }
+    if (s.mode == Mode::join && reskate_banned(s.host_id)) {
+        stop(s, "This host is banned from ReSkate multiplayer.");
+        return;
+    }
     for (const auto &link : links) {
         if (s.mode == Mode::host && s.banned.contains(link.id)) {
             s.transport.disconnect(link.id, "You were kicked from this session.");
@@ -273,7 +285,15 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             s.transport.disconnect(link.id, "You are banned from this host's lobbies.");
             continue;
         }
+        if (s.mode == Mode::host && reskate_banned(link.id)) {
+            s.transport.disconnect(link.id, banned_notice.data());
+            continue;
+        }
         auto *p = find_peer(s, link.id);
+        if (!p && s.mode == Mode::host && s.join_backoff.waiting(link.id, now)) {
+            s.transport.disconnect(link.id, "Too many failed attempts to join. Wait a little and try again.");
+            continue;
+        }
         if (!p && s.mode == Mode::host)
             p = &reserve(s, link.id, now);
         if (!p) {
@@ -329,7 +349,7 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
         if (!link)
             continue;
         const bool direct_link = s.mode == Mode::join && message.peer != s.host_id;
-        if (!link->budget.accept(now, message.bytes.size(),
+        if (!link->budget.accept(message.arrived ? message.arrived : now, message.bytes.size(),
                                  s.mode == Mode::join && !direct_link ? max_remote_players : 1U)) {
             disconnect(s, message.peer, "Peer exceeded the multiplayer packet limit.");
             if (s.mode == Mode::off)
@@ -574,11 +594,13 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             link->world_ready = true;
             link->travel_since = 0;
             link->last_packet = now;
+            if (joined) s.join_backoff.joined(message.peer);
             if (s.mode == Mode::host) {
                 send_required(s, message.peer, encode_wire(packet(s, PacketKind::welcome, now)));
                 if (joined) {
                     send_roster(s, now);
                     if (!s.tuning_packet.empty()) send_required(s, message.peer, s.tuning_packet);
+                    if (!s.extras_packet.empty()) send_required(s, message.peer, s.extras_packet);
                     send_required(s, message.peer, s.cosmetic_packet);
                     for (const auto &other : active_peers(s))
                         if (other.handshaken && other.member.id != message.peer)
@@ -651,6 +673,12 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
                 s.host_tuning = std::move(p.tuning);
             continue;
         }
+        // And the physics its tuning does not carry (Engine/Game/Multiplayer/session_physics.h).
+        if (p.kind == PacketKind::physics_extras) {
+            if (s.mode == Mode::join && message.peer == s.host_id && p.source == s.host_id && !dedicated_host(s))
+                s.host_extras = p.extras;
+            continue;
+        }
         if (p.kind == PacketKind::maps) {
             if (dedicated_host(s) && message.peer == s.host_id && p.source == s.host_id) {
                 s.server_maps = p.maps;
@@ -667,15 +695,24 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             }
             continue;
         }
-        // A dedicated server telling us about a party invite.
+        // Whoever hosts telling us about a party invite; or, hosting a lobby, a guest asking
+        // for something to be done with their party.
         if (p.kind == PacketKind::party) {
-            if (dedicated_host(s) && message.peer == s.host_id && p.source == s.host_id) receive_party(s, p, now);
+            if (s.mode == Mode::join) {
+                if (message.peer == s.host_id && p.source == s.host_id) receive_party(s, p, now);
+            } else if (s.mode == Mode::host) {
+                auto *sender = find_peer(s, p.source);
+                if (!direct_link && sender && sender->handshaken && message.peer == p.source &&
+                    routed_source(p, sender->member, message.peer, true, s.host_id) && sender->party_budget.accept(now, 20))
+                    host_party_request(s, p.source, p.party_action, p.party_player, now);
+            }
             continue;
         }
-        // A dedicated server's answer to one of our admin requests.
+        // A dedicated server's answer to one of our admin requests, or a lobby host's to a
+        // party request: a line for this player only.
         if (p.kind == PacketKind::admin) {
-            if (s.mode == Mode::join && message.peer == s.host_id && p.source == s.host_id && dedicated_host(s))
-                add_chat(s, 0, "Server", p.text);
+            if (s.mode == Mode::join && message.peer == s.host_id && p.source == s.host_id)
+                add_chat(s, 0, dedicated_host(s) ? "Server" : "ReSkate", p.text);
             continue;
         }
         // Chat is accepted while either side is still loading a map: it needs
@@ -690,6 +727,11 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             // Everyone holds everyone to the same pace, so a modified client cannot flood.
             if (!server && sender->chat_rate.accept(now, p.text, 1) != ChatRate::Verdict::accepted) continue;
             sender->last_packet = now;
+            // "/p": party chat, which a lobby's host relays to the sender's party and nobody else.
+            if (s.mode == Mode::host && p.text.starts_with("/p ")) {
+                host_party_chat(s, sender->member.id, std::string_view(p.text).substr(3), now);
+                continue;
+            }
             add_chat(s, sender->member.id, server ? std::string("Server")
                      : sender->member.name.empty() ? s.transport.name(sender->member.id) : sender->member.name, p.text);
             if (s.mode == Mode::host) broadcast(s, p, true, false, now, p.source);
@@ -798,6 +840,7 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
         }
     }
     update_scoring(s, now); // before the roster, so a host's own flag goes out with it
+    tick_host_parties(s, now); // and the lobby's parties, which the roster carries
     if (s.mode == Mode::host && world_playing(s, local) && (s.roster_dirty || now - s.last_roster > 2000000))
         send_roster(s, now);
     const auto peers = active_peers(s);

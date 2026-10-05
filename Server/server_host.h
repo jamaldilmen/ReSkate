@@ -77,6 +77,8 @@ class Host {
         bool received_voice{};
         std::uint32_t voice_sequence{};
         VoiceBudget voice_budget;
+        OutfitBudget outfit_budget;
+        SoundBudget sound_budget;
         ChatRate chat_rate;
         ChatBudget admin_budget, throwdown_budget, party_budget;
         SpeedCheck speed;           // how fast their game runs, from their pose timestamps
@@ -123,6 +125,7 @@ class Host {
     std::uint64_t party_revision_{};
     std::map<std::uint64_t, std::unique_ptr<Guest>> guests_;
     std::set<std::uint64_t> kicked_;
+    JoinBackoff join_backoff_; // Steam IDs whose attempts to join keep failing
     std::optional<PasswordKey> password_;
     std::uint64_t id_{}, secret_{}, epoch_{}, map_{}, world_ = 1;
     std::uint32_t sequence_{};
@@ -137,6 +140,7 @@ class Host {
     Packet packet(PacketKind kind, std::uint64_t now);
     unsigned capacity() const { return config_.max_players + 1; }
     std::string guest_name(const Guest &) const;
+    std::string player_name(std::string_view wanted, std::uint64_t id) const;
     bool is_admin(std::uint64_t id) const;
     bool is_banned(std::uint64_t id) const;
     void save();
@@ -154,7 +158,8 @@ class Host {
     void change_map(std::string_view map); // a level name, level path or destination
     bool same_map(std::string_view asset) const { return map_hash(map_destination(asset)) == map_; }
     bool accept_data(Guest &source, const Packet &);
-    void receive(std::uint64_t peer, std::span<const std::uint8_t> bytes);
+    // `received_at`: the transport's arrival time for the message (TransportMessage::arrived).
+    void receive(std::uint64_t peer, std::span<const std::uint8_t> bytes, std::uint64_t received_at);
     void receive_cosmetics();
     void sync_objects();
     void apply_layers();

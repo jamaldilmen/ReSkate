@@ -12,10 +12,9 @@ the launcher, the runtime that loads into the game, and the dedicated server.
   and the game runs even with Steam closed.
 - **Multiplayer.**
   - Host a Steam lobby for up to 32 players: public, or joined with a code, with an optional password.
-    Everyone in a lobby is in one party.
   - Join dedicated servers from the in-game server browser.
   - Proximity voice chat, and text chat with emotes and an optional bad-word filter.
-  - Parties on dedicated servers: invite, join, leave, promote.
+  - Parties in lobbies and on dedicated servers: invite, join, leave, promote.
   - Throwdowns with other players (Jam, Spot Battle and S.K.A.T.E.), and co-op challenges.
 - **In-game menu and console.**
   - Map and fast travel.
@@ -265,6 +264,16 @@ the full-mode work. No extracted game assets are shipped.
 - In game, the **MODS** tab of the ReSkate menu (**Insert**) turns mods on and off and applies the changes.
 - Mods are checked against the game build they were made for. Outdated mods, or mods that can't be merged
   cleanly, are left out with a message naming them, and the rest still load.
+- A mod that adds songs can give them their own playlist in the game's music screen with a
+  `reskate-music.json` in its folder:
+
+  ```json
+  {"schema": 1, "playlists": [{"name": "My Playlist", "songs": ["Artist - Title", "Artist - Other Title"]}]}
+  ```
+
+  Each entry is the song's artist and title exactly as the mod registers them, joined by ` - `. Entries that
+  match no song are ignored, and a playlist with no matching songs is not shown. A file that does not follow
+  this shape is skipped and logged. The songs themselves still have to be added by the mod.
 
 Only install mods you trust. Mods change game data, and custom scripts can run code.
 

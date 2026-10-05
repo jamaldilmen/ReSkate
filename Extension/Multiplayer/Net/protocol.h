@@ -7,6 +7,7 @@
 #include "Engine/Game/Multiplayer/distance_settings.h"
 #include "Engine/Game/Multiplayer/object_placement.h"
 #include "Engine/Game/Multiplayer/session_model.h"
+#include "Engine/Game/Multiplayer/session_physics.h"
 #include "Engine/Game/Multiplayer/tick_settings.h"
 #include "Engine/Game/World/park_rotation.h"
 #include "Engine/Game/World/world_layers.h"
@@ -24,7 +25,7 @@ namespace dingosdk::multiplayer {
 constexpr std::size_t max_skater_bones = 512, max_board_bones = 64;
 constexpr std::size_t max_packet = 24576;
 constexpr std::size_t packet_header_size = 64;
-constexpr std::uint16_t protocol_version = 38;
+constexpr std::uint16_t protocol_version = 41;
 constexpr std::size_t max_throwdown_message = 4096;
 // Packet::tuning: the host's SkatePhysicsTuning differences (Extension/Skater/physics_tuning.h).
 constexpr std::size_t max_physics_tuning = 16384;
@@ -64,16 +65,20 @@ enum class PacketKind : std::uint16_t {
     // The host's skate physics tuning, as differences from the game's own (opaque here;
     // empty = the game's). Only the host sends it; a dedicated server never needs to.
     physics_tuning = 27,
-    // A party request to a dedicated server, or its notice to one player (PartyAction).
+    // A party request to whoever hosts, or its notice to one player (PartyAction).
     party = 28,
     // A player telling the host or dedicated server how its mods change trick scoring
     // (Engine/Vfs/mod_scoring.h): sent once known, again whenever it changes.
-    scoring = 29
+    scoring = 29,
+    // The host's physics that its tuning does not carry: the trainer's tuning-class values and
+    // trick multipliers (Engine/Game/Multiplayer/session_physics.h; opaque here, empty = the
+    // game's own). Like physics_tuning, only the host sends it and a dedicated server never does.
+    physics_extras = 30
 };
-// Packet::party_action. Requests go from a player to the dedicated server (party_player =
-// the other player involved, 0 for leave/open/close); invited and withdrawn go from the
-// server to the invitee (party_player = the inviter). The server answers everything else
-// with a chat line and the next roster.
+// Packet::party_action. Requests go from a player to whoever hosts, a dedicated server or a
+// lobby's host (party_player = the other player involved, 0 for leave/open/close); invited
+// and withdrawn go from the host to the invitee (party_player = the inviter). The host
+// answers everything else with a chat line and the next roster.
 enum class PartyAction : std::uint8_t {
     invite = 1,    // invite party_player into the sender's party
     accept = 2,    // accept party_player's invite
@@ -84,8 +89,8 @@ enum class PartyAction : std::uint8_t {
     promote = 7,   // the leader hands the lead to party_player
     open = 8,      // the leader lets anyone join
     close = 9,     // the leader makes the party invite-only
-    invited = 10,  // server -> invitee: party_player invited you
-    withdrawn = 11 // server -> invitee: party_player's invite can no longer be accepted
+    invited = 10,  // host -> invitee: party_player invited you
+    withdrawn = 11 // host -> invitee: party_player's invite can no longer be accepted
 };
 bool valid_party_request(PartyAction action, std::uint64_t player) noexcept;
 // Steam accounts in the public universe. Players are individual accounts; a
@@ -122,7 +127,7 @@ struct Member {
     std::string name;
     bool admin{}; // roster: may change a dedicated server's settings
     // roster: the player's party (0 = none), whether they lead it, and (on the leader) whether
-    // anyone may join it. Each party has exactly one leader. A listen host's lobby is one party.
+    // anyone may join it. Each party has exactly one leader.
     std::uint32_t party{};
     bool party_leader{}, party_open{};
     // roster: a dedicated server measured the player's game running fast (a speedhack): nobody
@@ -185,6 +190,7 @@ struct Packet {
     std::vector<std::uint8_t> throwdown;      // throwdown: one encoded message (1..max_throwdown_message bytes)
     std::array<float, 3> teleport{};          // teleport: where the receiver goes (world position)
     std::vector<std::uint8_t> tuning;         // physics_tuning: 0..max_physics_tuning bytes
+    std::vector<std::uint8_t> extras;         // physics_extras: 0..max_physics_extras bytes
     PartyAction party_action = PartyAction::leave; // party: what is asked or told
     std::uint64_t party_player{};                   // party: the other player (see PartyAction)
     // scoring: the sender's scoring fingerprint, 0 for the game's own; `text` names the mods
@@ -205,6 +211,8 @@ bool valid_admin_text(std::string_view) noexcept;
 // The message a player typed, made valid: control characters and broken UTF-8
 // dropped, surrounding blanks trimmed, cut to the byte limit on a character boundary.
 std::string clean_chat_text(std::string_view);
+// A player's name as a roster carries it (valid_roster): the same cleaning, at most 128 bytes.
+std::string clean_roster_name(std::string_view);
 bool valid_pose(const Pose &) noexcept;
 std::vector<std::uint8_t> encode(const Packet &, bool compact_pose = false);
 // The same, with a pose encoded at another update interval (a recipient thinned by

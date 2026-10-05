@@ -34,14 +34,15 @@ int run() {
     std::vector<std::string> added;
     const auto config = load_config(file, &added);
     const auto has = [&](std::string_view name) { return std::ranges::find(added, name) != added.end(); };
-    check(has("enforce_tuning") && has("votes.seconds") && has("votes.kick") && has("score_check") && has("score_allow"),
+    check(has("enforce_tuning") && has("votes.seconds") && has("votes.kick") && has("score_check") && has("score_allow") &&
+              has("global_bans"),
           "New settings not reported");
     check(!has("name") && !has("tps") && !has("votes.map"), "Settings the file had reported as new");
     const auto written = text(file);
     check(written.find("\"enforce_tuning\"") != std::string::npos && written.find("\"seconds\"") != std::string::npos,
           "New settings not written into the file");
     check(config.name == "Old Server" && config.tps == 60 && !config.boosts && config.votes.map.enabled &&
-              config.votes.map.percent == 60 && config.enforce_tuning,
+              config.votes.map.percent == 60 && config.enforce_tuning && config.global_bans,
           "The file's own values or the new defaults were lost");
     const auto reloaded = load_config(file);
     check(reloaded.name == "Old Server" && !reloaded.boosts && reloaded.votes.map.percent == 60, "Values lost on rewrite");
@@ -67,6 +68,22 @@ int run() {
     std::ofstream(file, std::ios::binary) << R"({"score_check": "ban", "score_allow": ["nothex", "0", "abc"]})";
     const auto odd = load_config(file);
     check(odd.score_check == "warn" && odd.score_allow == std::vector<std::uint64_t>{0xabc}, "Bad scoring settings not cleaned");
+
+    // A port outside 1-65535 is refused, not wrapped to another port, and the file keeps the typo.
+    const auto refused = [&](const char *json) {
+        std::ofstream(file, std::ios::binary) << json;
+        try {
+            static_cast<void>(load_config(file));
+        } catch (const std::exception &) {
+            return text(file) == json;
+        }
+        return false;
+    };
+    check(refused(R"({"query_port": 70000})") && refused(R"({"port": 65536})") && refused(R"({"port": 0})"),
+          "An out-of-range port was accepted or the file rewritten");
+    std::ofstream(file, std::ios::binary) << R"({"port": 65535, "query_port": 1})";
+    const auto edges = load_config(file);
+    check(edges.port == 65535 && edges.query_port == 1, "Ports at the ends of the range refused");
 
     std::filesystem::remove_all(folder);
     if (failures) return 1;

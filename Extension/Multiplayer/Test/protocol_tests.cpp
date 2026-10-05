@@ -331,8 +331,30 @@ void cosmetics_codec() {
                     {board_recipe_key, 1, {0x3f800000}, {{13, "Own_Deck", {7}}}}};
     const auto bytes = encode(p);
     const auto decoded = decode(bytes);
-    check(decoded && decoded->appearance == p.appearance,
+    check(decoded && decoded->appearance == p.appearance && !decoded->appearance.hide_tag && !decoded->appearance.hide_items,
           "Cosmetic fields or opaque parameter bits were lost");
+    // A player's choices to go without their backend tag, or its animated items, travel with
+    // their outfit, each on its own.
+    for (const auto &[tag, items] : {std::pair{true, false}, std::pair{false, true}, std::pair{true, true}}) {
+        auto hidden = p;
+        hidden.appearance.hide_tag = tag, hidden.appearance.hide_items = items;
+        const auto told = decode(encode(hidden));
+        check(told && told->appearance.hide_tag == tag && told->appearance.hide_items == items &&
+                  told->appearance == hidden.appearance && !(told->appearance == p.appearance),
+              "A player's choice to hide their tag or their items was lost");
+    }
+    // So does how they have each marked cosmetic animate.
+    auto styled = p;
+    styled.appearance.marks[0] = {MarkMode::gradient, {1, 2, 3}, {250, 251, 252}, 2};
+    styled.appearance.marks[4] = {MarkMode::off, {}, {}, 1};
+    styled.appearance.marks.back() = {MarkMode::solid, {9, 8, 7}, {}, 0};
+    const auto kept = decode(encode(styled));
+    check(kept && kept->appearance == styled.appearance && kept->appearance.marks[0].to[2] == 252 &&
+              kept->appearance.marks.back().mode == MarkMode::solid && kept->appearance.marks.back().from[0] == 9 &&
+              kept->appearance.marks[1] == MarkStyle{} && !(kept->appearance == p.appearance),
+          "A player's cosmetic styles were lost");
+    check(!valid_mark_style({static_cast<MarkMode>(4), {}, {}, 0}) && !valid_mark_style({MarkMode::standard, {}, {}, 3}),
+          "A cosmetic style no menu can make was accepted");
     for (std::size_t n = 0; n < bytes.size(); ++n)
         check(!decode(std::span(bytes).first(n)), "Truncated cosmetics accepted");
     auto corrupt = bytes;
@@ -789,6 +811,19 @@ void dedicated_server_codec() {
     check(decode(encode(tuning)) && decode(encode(tuning))->tuning == tuning.tuning, "Physics tuning bytes lost");
     tuning.tuning.assign(max_physics_tuning + 1, 0);
     check(reject(tuning), "Oversized physics tuning encoded");
+    Packet extras;
+    extras.kind = PacketKind::physics_extras; extras.session = 9; extras.epoch = 10; extras.map = 11; extras.source = player;
+    check(decode(encode(extras)) && decode(encode(extras))->kind == PacketKind::physics_extras && decode(encode(extras))->extras.empty(),
+          "Empty physics extras (the game's own) lost");
+    extras.extras = {1, 0xde, 0xad, 0xbe, 0xef, 0, 0, 0x80, 0x3f};
+    check(decode(encode(extras)) && decode(encode(extras))->extras == extras.extras, "Physics extras bytes lost");
+    extras.extras.assign(dingosdk::max_physics_extras, 7);
+    check(decode(encode(extras)) && decode(encode(extras))->extras.size() == dingosdk::max_physics_extras, "The largest physics extras lost");
+    extras.extras.assign(dingosdk::max_physics_extras + 1, 0);
+    check(reject(extras), "Oversized physics extras encoded");
+    extras.extras = {1};
+    extras.source = 0;
+    check(reject(extras), "Physics extras from nobody encoded");
     auto moved = roster;
     moved.members = {{player, 20, "Skater"}, {server, 10, "My server"}};
     check(reject(moved), "A game server accepted as a guest");
@@ -856,6 +891,17 @@ void dedicated_server_codec() {
     check(row && row->dedicated && row->name == "Big  friendly server" && row->map == ad.map && row->players == 3 &&
               row->capacity == 16 && row->password_required && row->code == format_invite({server, ad.secret}),
           "Server tags did not round trip");
+    // A whole last character is kept, and one the byte limit cuts through is dropped whole.
+    const auto accented = read_server_tags(dingosdk::server::server_tags({"Skate Caf\xC3\xA9", "Caf\xC3\xA9", 1, 8, false, true, 1}), server);
+    check(accented && accented->name == "Skate Caf\xC3\xA9" && accented->map == "Caf\xC3\xA9",
+          "A server name lost its non-ASCII last letter");
+    for (std::size_t lead = 0; lead < 3; ++lead) {
+        std::string euros(lead, 'a');
+        for (int i = 0; i < 50; ++i) euros += "\xE2\x82\xAC";
+        const auto cut = dingosdk::server::server_tags({euros, "Caf\xC3\xA9", 1, 8, false, true, 1});
+        const auto name = cut.substr(cut.find(",n") + 2);
+        check(cut.size() < 128 && name.size() > lead && (name.size() - lead) % 3 == 0, "A server name was cut inside a character");
+    }
     check(!read_server_tags(tags, player), "A player's ID read as a server");
     check(!read_server_tags("reskate,v1,k1,c4", server), "An incompatible server version listed");
 }

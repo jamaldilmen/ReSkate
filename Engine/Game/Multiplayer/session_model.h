@@ -69,7 +69,7 @@ struct MultiplayerChatLine {
     std::string name, text;
     bool local{};               // sent by this player
     // The sender's role, as their nametag shows it: its colour (IM_COL32 layout, 0 = none)
-    // and a tag shown in a box before the name ("Dev", "Admin", "Host", "Friend" or empty).
+    // and a tag shown in a box before the name ("Dev", "Creator", "Homie", "Admin", "Host", "Friend" or empty).
     std::uint32_t color{};
     std::string tag;
 };
@@ -105,15 +105,32 @@ struct MultiplayerModel {
     // game's own). Guest: what that does here, while enforced.
     bool enforce_tuning{true};
     std::string tuning_status;
-    // Local display preferences: a lobby shown as the game's own party (Lobby party),
-    // and the floating name label above each peer.
-    bool party_overlay{true}, nametags{true};
+    // Local display preference: the floating name label above each peer.
+    bool nametags{true};
     // Nametag style: ReSkate's own (name, distance, role colours, dots) or the game's.
     bool custom_nametags{true};
     // Local: whether session text chat shows at all (and T opens it).
     bool chat_visible{true};
     // Local: bad words in chat names and messages show as **** (on by default).
     bool chat_filter{true};
+    // Local: the tag the ReSkate backend gives this player ("Dev", "Creator" or "Homie"; empty
+    // for most players) and its role colour, and whether they show it, and the animated items
+    // that come with it, to everyone.
+    std::string identity_tag;
+    std::uint32_t identity_tag_colour{};
+    bool identity_tag_shown{true}, identity_items_shown{true};
+    // Local: how each of this player's marked cosmetics is coloured, for the Special page: what
+    // they wear in each slot ("Top", "Shoes", ...), then the parts of their board. mode: 0 what
+    // their list gives (`identity_animation`: "RAINBOW", "RED" or "GOLD"), 1 off, 2 a gradient
+    // between the two colours they picked, 3 the first of them alone. speed: 0 normal, 1 slow,
+    // 2 fast.
+    struct IdentityStyle {
+        std::string name;
+        int mode{}, speed{};
+        std::array<float, 3> from{}, to{};
+    };
+    std::vector<IdentityStyle> identity_styles;
+    std::string identity_animation;
     float voice_range = default_voice_range;  // how far the host (or server) forwards proximity voice
     // In a dedicated server's session: the server is the host but not a player.
     // Admins it lists may change its settings, and its map through Levels.
@@ -134,8 +151,8 @@ struct MultiplayerModel {
     bool password_required{};
     int players = 1, capacity = multiplayer_player_limit;
     std::vector<MultiplayerPlayer> roster;
-    // The local player's party: a lobby is always one party led by the host; on a dedicated
-    // server players form their own (`parties`: invite, leave, kick... are available).
+    // The local player's party. Players form their own, in a lobby as on a dedicated server
+    // (`parties`: invite, leave, kick... are available in any session).
     std::uint32_t party{};
     bool party_leader{}, party_open{}, parties{};
     std::vector<MultiplayerPartyInvite> party_invites; // newest last

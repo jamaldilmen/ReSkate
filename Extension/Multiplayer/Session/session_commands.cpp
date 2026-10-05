@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdio>
 #include <charconv>
+#include <sstream>
 #include <stdexcept>
 #include <ctime>
 
@@ -113,9 +114,8 @@ std::string party_command(Session &s, std::string_view argument) {
         return p ? peer_name(s, *p) : s.transport.name(id);
     };
     if (verb.empty() || verb == "status" || verb == "list") {
-        if (!s.local_party) return dedicated_host(s) ? "You're not in a party. Invite a player from their player card or with: party invite <name>."
-                                                     : "You're the only one in this lobby.";
-        std::string text = std::string(dedicated_host(s) ? "Your party" : "Your lobby's party") + (s.local_party_open ? " (open):" : ":");
+        if (!s.local_party) return "You're not in a party. Invite a player from their player card or with: party invite <name>.";
+        std::string text = std::string("Your party") + (s.local_party_open ? " (open):" : ":");
         const auto local = s.transport.status().local_id;
         text += " " + s.transport.name(local) + (s.local_party_leader ? " (leader)" : "");
         for (const auto &peer : active_peers(s))
@@ -123,7 +123,6 @@ std::string party_command(Session &s, std::string_view argument) {
                 text += ", " + peer_name(s, peer) + (peer.member.party_leader ? " (leader)" : "");
         return text;
     }
-    if (!dedicated_host(s)) return "Everyone in a lobby is in one party with the host.";
     static constexpr std::pair<std::string_view, PartyAction> verbs[] = {
         {"invite", PartyAction::invite}, {"accept", PartyAction::accept}, {"decline", PartyAction::decline},
         {"join", PartyAction::join},     {"leave", PartyAction::leave},   {"kick", PartyAction::kick},
@@ -307,16 +306,6 @@ std::string clear_guest_objects(Session &s, std::string_view) {
     return removed ? "Deleted " + std::to_string(removed) + " guest object" + (removed == 1 ? "" : "s") + "."
                    : "Guests have no placed objects to delete.";
 }
-std::string edit_party_overlay(Session &s, std::string_view argument) {
-    const auto enabled = parse_switch(argument, s.party_overlay);
-    if (!enabled) return "Use on, off, or toggle for the lobby party.";
-    s.party_overlay = *enabled;
-    s.display_preferences_loaded = true;
-    profile_runtime::set_local_preference("LobbyParty", s.party_overlay);
-    s.roster_dirty = true;
-    return s.party_overlay ? "Lobby party on: everyone in a lobby is in your game's party."
-                           : "Lobby party off: lobby players are not shown as your game's party.";
-}
 std::string edit_nametags(Session &s, std::string_view argument) {
     const auto enabled = parse_switch(argument, s.nametags);
     if (!enabled) return "Use on, off, or toggle for peer nametags.";
@@ -335,6 +324,43 @@ std::string edit_nametag_style(Session &s, std::string_view argument) {
     apply_nametags(s);
     profile_runtime::set_local_preference("CustomNametags", s.custom_nametags);
     return s.custom_nametags ? "ReSkate nametags: names, distances and dots." : "The game's own nametags.";
+}
+// The Special page: a player on one of the backend's lists going without their tag, or
+// without the animation on their items. Their next appearance packet tells everyone
+// (session_send.cpp).
+std::string edit_own_tag(Session &, std::string_view argument) {
+    const auto shown = parse_switch(argument, own_tag_shown());
+    if (!shown) return "Use on, off, or toggle for your tag.";
+    show_own_tag(*shown);
+    profile_runtime::set_local_preference("IdentityTag", *shown);
+    return *shown ? "Your tag shows." : "Your tag is hidden, for you and everyone you skate with.";
+}
+std::string edit_own_items(Session &, std::string_view argument) {
+    const auto shown = parse_switch(argument, own_items_shown());
+    if (!shown) return "Use on, off, or toggle for your items.";
+    show_own_items(*shown);
+    profile_runtime::set_local_preference("IdentityItems", *shown);
+    return *shown ? "Your items animate." : "Your items are plain, for you and everyone you skate with.";
+}
+// The Special page: how one of the player's marked cosmetics is coloured, as
+// "<cosmetic> <mode> <rrggbb> <rrggbb> <speed>" (MarkStyle). It goes out with their next
+// appearance packet and is kept in their profile.
+std::string edit_mark_style(Session &, std::string_view argument) {
+    std::istringstream in{std::string(argument)};
+    unsigned item{}, mode{}, from{}, to{}, speed{};
+    if (!(in >> item >> mode >> std::hex >> from >> to >> std::dec >> speed) || item >= mark_items || mode > 3 ||
+        from > 0xffffff || to > 0xffffff || speed > 2)
+        return "That is not a cosmetic style.";
+    const auto colour = [](unsigned value) {
+        return std::array<std::uint8_t, 3>{static_cast<std::uint8_t>(value >> 16), static_cast<std::uint8_t>(value >> 8),
+                                           static_cast<std::uint8_t>(value)};
+    };
+    auto styles = developer_hoodie_detail::own_styles.load();
+    styles[item] = {static_cast<MarkMode>(mode), colour(from), colour(to), static_cast<std::uint8_t>(speed)};
+    developer_hoodie_detail::own_styles.store(styles);
+    profile_runtime::set_local_values({{"IdentityStyles", Json(developer_hoodie_detail::mark_styles_text(styles))}});
+    return std::string(mark_item_names[item]) +
+           (mode == 1 ? ": off." : mode == 2 ? ": your gradient." : mode == 3 ? ": your color." : ": back to the usual.");
 }
 // Hidden chat still receives lines, so showing it again brings back the conversation.
 std::string edit_chat_visible(Session &s, std::string_view argument) {
@@ -448,16 +474,22 @@ std::string send_admin(Session &s, std::string text) {
     if (!send_packet(s, s.host_id, request, true, false)) return "Could not reach the server.";
     return "Sent to the server.";
 }
+// The Special page's commands. They are a player's own offline as well, where their hoodie and
+// board still animate.
+bool own_mark_command(std::string_view action) {
+    return action == "mark-tag" || action == "mark-items" || action == "mark-style";
+}
 } // namespace
 bool queue_command(std::string_view action, std::string_view argument, std::string_view password) {
-    if (launcher::offline_mode()) return false;
+    if (launcher::offline_mode() && !own_mark_command(action)) return false;
     if ((action != "host" && action != "host-config" && action != "join" && action != "join-lobby" && action != "join-friend-lobby" && action != "stop" &&
          action != "distances" && action != "object-placement" && action != "kick" && action != "clear-objects" &&
-         action != "party-overlay" && action != "nametags" && action != "nametag-style" && action != "chat-visible" && action != "chat-filter" &&
+         action != "nametags" && action != "nametag-style" && action != "chat-visible" && action != "chat-filter" &&
+         !own_mark_command(action) &&
          action != "voice" && action != "voice-mute" &&
          action != "voice-volume" && action != "voice-allow" && action != "voice-range" && action != "chat" && action != "ban" && action != "unban" &&
          action != "world-layer-sync" && action != "noclip-allow" && action != "nobail-allow" && action != "boosts-allow" &&
-         action != "tp" &&
+         action != "tuning-enforce" && action != "tp" &&
          action != "tpall" && action != "tphere" && action != "browse" &&
          action != "server" && action != "party") ||
         argument.size() > (action == "host" || action == "host-config" ? 160U : action == "chat" ? 4 * multiplayer_chat_max_bytes
@@ -477,7 +509,8 @@ bool queue_command(std::string_view action, std::string_view argument, std::stri
     return true;
 }
 std::string command(std::string_view action, std::string_view argument, std::string_view password) {
-    if (launcher::offline_mode()) return "Multiplayer is unavailable in offline mode. Start Steam and relaunch ReSkate.";
+    if (launcher::offline_mode() && !own_mark_command(action))
+        return "Multiplayer is unavailable in offline mode. Start Steam and relaunch ReSkate.";
     const bool configured_host = action == "host-config";
     if (configured_host) action = "host";
     PrivateRequest input;
@@ -513,8 +546,8 @@ std::string command(std::string_view action, std::string_view argument, std::str
                 if (!result.empty()) add_chat(s, 0, "ReSkate", result);
                 return result;
             } else if (!dedicated_host(s) && verb == "p") {
-                // In a lobby everyone is in the one party: party chat is chat.
-                const auto refused = send_chat(s, rest);
+                // A lobby's host relays party chat, as a dedicated server does.
+                const auto refused = send_party_chat(s, rest);
                 if (!refused.empty() && (s.mode == Mode::host || s.mode == Mode::join)) add_chat(s, 0, "ReSkate", refused);
                 return refused.empty() ? "Message sent." : refused;
             } else if (!dedicated_host(s) && verb == "party") {
@@ -630,8 +663,9 @@ std::string command(std::string_view action, std::string_view argument, std::str
             {"ban", ban_player},                           {"unban", unban_player},
             {"clear-objects", clear_guest_objects},
             {"world-layer-sync", edit_world_layer_sync},   {"distances", edit_distances},
-            {"party-overlay", edit_party_overlay},         {"nametags", edit_nametags},
+            {"nametags", edit_nametags},
             {"nametag-style", edit_nametag_style},
+            {"mark-tag", edit_own_tag}, {"mark-items", edit_own_items}, {"mark-style", edit_mark_style},
             {"chat-visible", edit_chat_visible}, {"chat-filter", edit_chat_filter}};
         for (const auto &[name, edit] : settings)
             if (action == name) {
@@ -711,6 +745,14 @@ std::string command(std::string_view action, std::string_view argument, std::str
         unsigned tps = multiplayer_default_tps;
         std::string_view lobby_name;
         auto visibility = argument;
+        // Menus queue host and join and never see this result: show a refusal as the status.
+        const auto refuse = [&s](std::string reason) {
+            s.status = std::move(reason);
+            publish(s);
+            return s.status;
+        };
+        // Joining is for the host or the server to refuse (a server may opt out of the bans).
+        if (action == "host" && reskate_banned(s.transport.status().local_id)) return refuse(std::string(banned_notice));
         if (action == "host") {
             const auto space = argument.find(' ');
             if (space != std::string_view::npos) {
@@ -722,16 +764,16 @@ std::string command(std::string_view action, std::string_view argument, std::str
                 const auto result = std::from_chars(number.data(), number.data() + number.size(), capacity);
                 if (result.ec != std::errc{} || result.ptr != number.data() + number.size() || capacity < 2 ||
                     capacity > multiplayer_lobby_player_limit)
-                    return "Choose a player limit from 2 to " + std::to_string(multiplayer_lobby_player_limit) + ".";
+                    return refuse("Choose a player limit from 2 to " + std::to_string(multiplayer_lobby_player_limit) + ".");
             }
             if (!visibility.empty() && visibility != "code" && visibility != "public")
-                return "Use mp host code <limit> [lobby name] or mp host public <limit> [lobby name].";
+                return refuse("Use mp host code <limit> [lobby name] or mp host public <limit> [lobby name].");
             if (configured_host) {
                 const auto split = lobby_name.find(' ');
                 const auto rate = lobby_name.substr(0, split);
                 const auto result = std::from_chars(rate.data(), rate.data() + rate.size(), tps);
                 if (result.ec != std::errc{} || result.ptr != rate.data() + rate.size() || !valid_multiplayer_tps(tps))
-                    return "Choose 20, 30, 60, or 120 TPS before hosting.";
+                    return refuse("Choose 20, 30, 60, or 120 TPS before hosting.");
                 lobby_name = split == std::string_view::npos ? std::string_view{} : lobby_name.substr(split + 1);
             }
             const auto first = lobby_name.find_first_not_of(' ');
@@ -739,16 +781,16 @@ std::string command(std::string_view action, std::string_view argument, std::str
                 : lobby_name.substr(first, lobby_name.find_last_not_of(' ') - first + 1);
             if (lobby_name.size() > 128 || std::any_of(lobby_name.begin(), lobby_name.end(),
                 [](unsigned char c) { return c < 32 || c == 127; }))
-                return "Lobby names must be at most 128 bytes with no control characters.";
+                return refuse("Lobby names must be at most 128 bytes with no control characters.");
             // A lobby browsers refuse to list is no use to anyone: say so while it can be fixed.
             if (text::contains_bad_words(lobby_name))
-                return "That lobby name contains blocked words. Choose another one.";
+                return refuse("That lobby name contains blocked words. Choose another one.");
         }
         std::optional<Invite> invitation;
         if (action == "join") {
             invitation = parse_invite(argument);
             if (!invitation)
-                return "Invalid join code. Paste the complete SteamID-session code from the host.";
+                return refuse("Invalid join code. Paste the complete SteamID-session code from the host.");
         }
         stop(s, "Starting multiplayer...");
         s.chat.clear(); // A new session starts with an empty chat.
