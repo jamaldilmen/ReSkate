@@ -21,6 +21,8 @@ struct Audio {
     std::vector<std::int16_t> thud=make_impact_sound(false);
     std::array<std::vector<std::int16_t>,4> cracks{make_impact_sound(true,0),make_impact_sound(true,1),
         make_impact_sound(true,2),make_impact_sound(true,3)};
+    std::array<std::vector<std::int16_t>,4> splats{make_splat_sound(0),make_splat_sound(1),
+        make_splat_sound(2),make_splat_sound(3)};
     std::vector<std::int16_t> custom_crack;
     std::string status="Impact and bone-crack sounds ready.";
     ~Audio() {
@@ -108,23 +110,34 @@ std::string update_impact_audio(const VisualOptions& options,const VisualEvents&
             (!crack && (!options.impact_sound || options.sound_volume<=0))) return s.status;
         // One layered sound per contact batch, preferring a newly fractured
         // part. Bounded voices/cooldown prevent a pile-up during a ragdoll.
+        // A jam hit adds the splat under the crack or thud, on a second voice.
+        const auto variant=static_cast<unsigned>((events.latest_impact_ms^(events.latest_bone*0x9e3779b9u))%4);
+        const auto strength=std::clamp(std::sqrt(events.latest_severity)/24.f,.25f,1.f);
+        struct Layer { const std::vector<std::int16_t>* samples; float volume, ratio; };
+        std::array<Layer,2> layers{};
+        std::size_t layer_count{};
+        layers[layer_count++]={crack ? (s.audio->custom_crack.empty() ? &s.audio->cracks[variant] : &s.audio->custom_crack) : &s.audio->thud,
+            (crack ? options.fracture_volume : options.sound_volume)*strength,
+            crack && !s.audio->custom_crack.empty() ? 1.f : .92f+static_cast<float>(variant)*.045f};
+        if (jam_hit(options,events))
+            layers[layer_count++]={&s.audio->splats[variant],std::max(options.sound_volume,options.fracture_volume)*std::min(1.f,strength*1.2f),
+                .9f+static_cast<float>(variant)*.04f};
+        std::size_t played{};
         for (auto* voice : s.audio->voices) {
+            if (played==layer_count) break;
             XAUDIO2_VOICE_STATE voice_state{};
             voice->GetState(&voice_state,XAUDIO2_VOICE_NOSAMPLESPLAYED);
             if (voice_state.BuffersQueued) continue;
-            const auto variant=static_cast<unsigned>((events.latest_impact_ms^(events.latest_bone*0x9e3779b9u))%4);
-            const auto& samples=crack ? (s.audio->custom_crack.empty() ? s.audio->cracks[variant] : s.audio->custom_crack) : s.audio->thud;
-            const auto strength=std::clamp(std::sqrt(events.latest_severity)/24.f,.25f,1.f);
-            const auto ratio=crack && !s.audio->custom_crack.empty() ? 1.f : .92f+static_cast<float>(variant)*.045f;
-            if (FAILED(voice->SetVolume((crack ? options.fracture_volume : options.sound_volume)*strength)) ||
-                FAILED(voice->SetFrequencyRatio(ratio))) continue;
+            const auto& layer=layers[played];
+            if (FAILED(voice->SetVolume(layer.volume)) || FAILED(voice->SetFrequencyRatio(layer.ratio))) continue;
             XAUDIO2_BUFFER buffer{};
             buffer.Flags=XAUDIO2_END_OF_STREAM;
-            buffer.AudioBytes=static_cast<UINT32>(samples.size()*sizeof(samples.front()));
-            buffer.pAudioData=reinterpret_cast<const BYTE*>(samples.data());
+            buffer.AudioBytes=static_cast<UINT32>(layer.samples->size()*sizeof(layer.samples->front()));
+            buffer.pAudioData=reinterpret_cast<const BYTE*>(layer.samples->data());
             if (SUCCEEDED(voice->SubmitSourceBuffer(&buffer)) && SUCCEEDED(voice->Start())) {
                 s.played_ms=now; s.stopped=false;
-                break;
+                ++played;
+                continue;
             }
             voice->Stop(); voice->FlushSourceBuffers();
         }

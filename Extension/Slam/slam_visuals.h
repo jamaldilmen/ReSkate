@@ -11,7 +11,7 @@ const char* xray_visibility_name(XrayVisibility value) noexcept;
 struct VisualOptions {
     XrayVisibility visibility = XrayVisibility::attempt;
     float opacity = .86f, flash_strength = .35f, impact_duration_s = 1.5f;
-    bool reduced_effects{}, only_impacted{}, only_fractured{}, normal_play{};
+    bool reduced_effects{}, only_impacted{}, only_fractured{}, normal_play = true;
     bool fracture_marks = true, impact_sound = true;
     bool replay = true;
     float sound_volume = .45f;
@@ -55,6 +55,11 @@ struct VisualAppearance {
 };
 // Original, bounded 48 kHz mono PCM; no extracted or downloaded audio.
 std::vector<std::int16_t> make_impact_sound(bool fracture,unsigned variant=0);
+// Original 48 kHz mono PCM for a jam hit: a wet slap, a falling body thump, a bubbling
+// squelch and a few drips. Synthesized like the others; no extracted audio.
+std::vector<std::int16_t> make_splat_sound(unsigned variant=0);
+// A fracture, or an impact well past the effect threshold: the hits that land like jam.
+bool jam_hit(const VisualOptions& options,const VisualEvents& events) noexcept;
 // Optional replacement clip: RIFF PCM16, 48 kHz mono, at most two seconds.
 std::optional<std::vector<std::int16_t>> decode_impact_wav(std::span<const std::byte> bytes) noexcept;
 struct TimePulseFrame {float factor = 1; bool active{},started{};};

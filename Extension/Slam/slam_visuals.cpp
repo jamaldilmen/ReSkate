@@ -235,6 +235,52 @@ std::vector<std::int16_t> make_impact_sound(bool fracture,unsigned variant) {
     samples.front()=samples.back()=0;
     return samples;
 }
+std::vector<std::int16_t> make_splat_sound(unsigned variant) {
+    constexpr unsigned rate=48000, count=21600; // 0.45 s
+    constexpr float tau=6.28318530718f;
+    std::vector<std::int16_t> samples(count);
+    std::uint32_t random=0x5a17c3u^((variant+1)*0x9e3779b9u);
+    const auto next=[&] { random^=random<<13; random^=random>>17; random^=random<<5; return static_cast<float>(random&65535u)/32767.5f-1; };
+    // Drip times and pitches, seeded per variant.
+    std::array<float,4> drip_at{}, drip_pitch{};
+    for (std::size_t i=0;i<drip_at.size();++i) {
+        drip_at[i]=.12f+.06f*static_cast<float>(i)+.03f*(next()*.5f+.5f);
+        drip_pitch[i]=700.f+300.f*(next()*.5f+.5f);
+    }
+    float previous_noise{}, low1{}, low2{}, phase{}, wobble{};
+    for (unsigned i=0;i<count;++i) {
+        const float t=static_cast<float>(i)/rate;
+        const float noise=next();
+        const float high=(noise-previous_noise)*.5f; previous_noise=noise;
+        low1+=.08f*(noise-low1); low2+=.08f*(low1-low2);           // two-pole low pass: wet mass
+        // Slap: a broadband smack, gone in a few milliseconds.
+        const float slap=high*std::exp(-t/.006f);
+        // Body: a heavy thump whose pitch sinks as the sack flattens.
+        phase+=tau*(38.f+34.f*std::exp(-t/.06f))/rate;
+        const float body=std::sin(phase)*std::exp(-t/.11f);
+        // Squelch: dark noise, swelling just after contact, bubbling at a slowing rate.
+        wobble+=tau*(30.f-36.f*t+2.f*noise)/rate;
+        const float swell=std::min(1.f,std::max(0.f,(t-.012f)/.02f))*std::exp(-std::max(0.f,t-.03f)/.16f);
+        const float squelch=low2*4.f*swell*(.55f+.45f*std::sin(wobble));
+        // Drips: short falling chirps after the hit.
+        float drips{};
+        for (std::size_t d=0;d<drip_at.size();++d) {
+            const float since=t-drip_at[d];
+            if (since<0 || since>.05f) continue;
+            const float pitch=drip_pitch[d]*(1.f-4.f*since);
+            drips+=std::sin(tau*pitch*since)*std::exp(-since/.012f)*.18f;
+        }
+        const float attack=std::min(1.f,t/.0004f);
+        const float end=std::clamp((.45f-t)/.03f,0.f,1.f);
+        const float value=(slap*.55f+body*.6f+squelch*.5f+drips)*attack*end;
+        samples[i]=static_cast<std::int16_t>(std::lround(std::clamp(value,-.85f,.85f)*32767));
+    }
+    samples.front()=samples.back()=0;
+    return samples;
+}
+bool jam_hit(const VisualOptions& options,const VisualEvents& events) noexcept {
+    return events.latest_fracture || events.latest_severity>=options.effect_severity*1.5f;
+}
 std::optional<std::vector<std::int16_t>> decode_impact_wav(std::span<const std::byte> bytes) noexcept {
     try {
         if (bytes.size()<44 || bytes.size()>256*1024) return {};
