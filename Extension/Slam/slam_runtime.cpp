@@ -9,6 +9,7 @@
 #include "Extension/Multiplayer/Remote/native_pose_layout.h"
 #include "Extension/Multiplayer/Remote/native_skater.h"
 #include "Extension/Skater/no_bail.h"
+#include "Extension/Trainer/trainer.h"
 #include "Extension/Skater/manual_bail_request.h"
 #include "Extension/Profile/local_profile_runtime.h"
 #include "Extension/Settings/named_settings.h"
@@ -30,6 +31,7 @@
 #include <cstring>
 #include <mutex>
 #include <optional>
+#include <format>
 #include <future>
 
 namespace dingosdk::slam {
@@ -56,6 +58,10 @@ struct State {
     SavedStartRetry retry;
     std::atomic<std::uint64_t> level_generation{1};
     FreeplayXray normal_xray;
+    LastingInjuries lasting;
+    std::vector<std::string> lasting_applied; // game thread only
+    std::uint64_t lasting_sync_at{};
+    std::atomic<bool> lasting_heal_requested{};
     ReplayVisualHistory replay_history;
     std::uintptr_t history_recorder{},history_stream{},history_entity{};
     std::uint64_t history_generation{};
@@ -882,6 +888,43 @@ PassOutFrame pass_out_frame() noexcept {
         return s.published.pass_out;
     } catch (...) {return {};}
 }
+void request_heal() noexcept { state().lasting_heal_requested.store(true,std::memory_order_release); }
+namespace {
+// Game thread: trainer commands run here, as they do from the console.
+void sync_lasting(State& s,bool active) {
+    std::vector<std::string_view> wanted;
+    {
+        std::lock_guard lock(s.mutex);
+        if (s.lasting_heal_requested.exchange(false,std::memory_order_acq_rel)) s.lasting.heal("slam heal");
+        if (!active && s.lasting.summary()!="none") s.lasting.heal("no local skater");
+        if (active) wanted=s.lasting.wanted();
+    }
+    const auto now=GetTickCount64();
+    if (now<s.lasting_sync_at) return;
+    s.lasting_sync_at=now+500;
+    const auto is_wanted=[&](std::string_view name){return std::ranges::find(wanted,name)!=wanted.end();};
+    for (auto it=s.lasting_applied.begin();it!=s.lasting_applied.end();) {
+        if (is_wanted(*it)) { ++it; continue; }
+        const auto reply=trainer::command("preset",{"remove",*it});
+        logging::log(logging::Level::info,logging::Channel::skater,"Lasting injuries: {}",reply);
+        if (reply.starts_with("error")) { ++it; continue; }
+        it=s.lasting_applied.erase(it);
+    }
+    for (const auto name : wanted) {
+        if (std::ranges::find(s.lasting_applied,name)!=s.lasting_applied.end()) continue;
+        const auto reply=trainer::command("preset",{"apply",std::string(name)});
+        // Before the trainer has read the game's tuning a preset reaches no values: try again.
+        if (reply.starts_with("error") || reply.find(": 0 values set")!=std::string::npos) continue;
+        logging::log(logging::Level::info,logging::Channel::skater,"Lasting injuries: {}",reply);
+        s.lasting_applied.emplace_back(name);
+    }
+    std::lock_guard lock(s.mutex);
+    std::string on;
+    for (const auto& name : s.lasting_applied) on+=(on.empty() ? "" : ", ")+name;
+    s.published.lasting_status=std::format("Lasting injuries: {} | presets on: {} | last healed by: {}.",
+        s.lasting.summary(),on.empty() ? "none" : on,s.lasting.last_heal().empty() ? "nothing yet" : s.lasting.last_heal());
+}
+}
 void tick(std::uintptr_t base, std::uintptr_t client, std::uintptr_t entity, bool ready,
     bool no_bail, bool noclip, bool editor, bool first_person, std::string_view map) noexcept {
     try {
@@ -904,6 +947,9 @@ void tick(std::uintptr_t base, std::uintptr_t client, std::uintptr_t entity, boo
             resolve_replay_actor(base,client,replay_actor);
         const bool owned = !replaying && ready && !noclip && !editor &&
             resolve_local_bail_owner(client, entity, owner);
+        // Lasting injuries follow the local skater: a respawn, a level load, noclip, the park
+        // editor or a replay heals them and puts the injury presets back to stock.
+        sync_lasting(s,owned);
         // Multiplayer exits before installing these hooks in solo play. Slam
         // must initialize the shared hooks on the client thread itself. Do
         // this before taking our mutex: installation touches native threads.
@@ -1392,6 +1438,9 @@ void observe_skeleton(std::uintptr_t rig, float seconds, bool wipeout) noexcept 
             if (s.normal_xray.result().impacts>previous_impacts)
                 logging::log(logging::Level::info,logging::Channel::skater,"Normal-play X-ray: {} impacts tracked this fall.",s.normal_xray.result().impacts);
         }
+        s.lasting.step(frame,static_cast<std::uint64_t>(watch.owner.entity),GetTickCount64());
+        if (s.lasting.take_changed())
+            logging::log(logging::Level::info,logging::Channel::skater,"Lasting injuries: {}.",s.lasting.summary());
         if (s.challenge.result().phase == Phase::results && previous_phase != Phase::results) {
             if (!s.challenge.result().cancelled && !s.attempt_map.empty())
                 s.completed_attempts.push_back({s.attempt_serial,s.attempt_map,s.challenge.result()});

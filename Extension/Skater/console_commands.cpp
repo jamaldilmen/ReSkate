@@ -5,8 +5,8 @@
 #include <format>
 namespace dingosdk::console {
 void register_movement_commands(Commands &registry) {
-    auto slam_action = argument("start|retry|bail|stop|dismiss|status", Type::text, true);
-    slam_action.choices = {"start", "retry", "bail", "stop", "dismiss", "status"};
+    auto slam_action = argument("start|retry|bail|stop|dismiss|status|injuries|heal", Type::text, true);
+    slam_action.choices = {"start", "retry", "bail", "stop", "dismiss", "status", "injuries", "heal"};
     auto slam_entry = action("slam", "Offline Slam Challenge controls and physics telemetry", Group::movement, {slam_action});
     slam_entry.run = [](const Model &, const Values &args, const Output &out) {
         const auto operation = args.empty() ? std::string("status") : std::get<std::string>(args[0]);
@@ -24,6 +24,11 @@ void register_movement_commands(Commands &registry) {
                     value.replay_available ? "ready" : "waiting for the local render actor",
                     static_cast<double>(value.replay_time_ms)/1000,
                     value.replay_injuries_known ? "matched" : "unavailable (neutral bones)"));
+        } else if (operation == "injuries") {
+            out(slam::snapshot().lasting_status);
+        } else if (operation == "heal") {
+            slam::request_heal();
+            out("Healing every lasting injury.");
         } else {
             const auto request = operation == "stop" ? slam::Action::stop : operation == "dismiss" ? slam::Action::dismiss :
                 operation=="bail" ? slam::Action::bail : operation=="retry" ? slam::Action::retry : slam::Action::start;

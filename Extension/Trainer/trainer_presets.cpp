@@ -185,6 +185,25 @@ const std::vector<BuiltinPreset> &builtin_presets() {
         {"Smooth Surfaces", "Rough ground rides like polished concrete.", {{"physicsmode.makesurfacessmooth", false, 1.0}}},
         {"Long Wheelbase", "Trucks 10 cm further out at both ends. Takes effect on the next respawn.",
          {{"physicstrucks.truckzposfront", false, 0.0143}, {"physicstrucks.truckzposback", false, 0.0143}}},
+        // Hall of Meat lasting injuries (slam_lasting.cpp) switch these on and off; each group
+        // owns its values, so the injuries combine without overwriting each other. The two leg
+        // presets share values and are never on together.
+        {"Injury: Broken Leg", "One broken leg: weak pop, slow pushing, a limp on foot.",
+         {{"physicsmode.jumpmaxheight", true, 0.45}, {"physicsmode.jumpminheight", true, 0.5},
+          {"physicsmode.grindjump", true, 0.5}, {"physicspush.maxpushablespeed !camera", true, 0.55},
+          {"jump.basejumpheight", true, 0.5}, {"jump.maxjumpheight", true, 0.5}, {"locomotion.sprintspeed", true, 0.45}}},
+        {"Injury: Broken Legs", "Both legs broken: almost no pop, barely pushing, crawling pace on foot.",
+         {{"physicsmode.jumpmaxheight", true, 0.2}, {"physicsmode.jumpminheight", true, 0.25},
+          {"physicsmode.grindjump", true, 0.25}, {"physicspush.maxpushablespeed !camera", true, 0.3},
+          {"jump.basejumpheight", true, 0.2}, {"jump.maxjumpheight", true, 0.2}, {"locomotion.sprintspeed", true, 0.25}}},
+        {"Injury: Broken Arm", "A broken arm: slow flips and spins, grinds are hard to lock on.",
+         {{"physicsreckoning.flipscalar", true, 0.55}, {"physicsairstates.maxspinspeed", true, 0.55},
+          {"physicsmode.maxautobodyspinspeed", true, 0.55}, {"physicsmode.grindlockdist", true, 0.5}}},
+        {"Injury: Concussion", "A head injury: the board wobbles early and you bail easily.",
+         {{"physicsmode.speedwobblestartspeed", true, 0.45}, {"wipeoutfallspeed.", true, 0.6},
+          {"physicswipeout.wipeout_ maxspeed", true, 0.6}, {"physicsmode.wipeout_ acceleration", true, 0.6}}},
+        {"Jam", "Hard falls land dead instead of bouncing, and count as hard from about 5 m.",
+         {{"wipeout.strongimpactrestitution", false, 0.0}, {"wipeout.strongimpactminvelocity", false, 10.0}}},
     };
     return presets;
 }

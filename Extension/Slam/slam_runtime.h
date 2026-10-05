@@ -4,6 +4,7 @@
 #include "slam_visuals.h"
 #include "slam_progression.h"
 #include "slam_controls.h"
+#include "slam_lasting.h"
 #include <array>
 #include <cstdint>
 #include <string>
@@ -36,6 +37,8 @@ struct Snapshot {
     bool challenge_options_ready{}, result_best_ready{}, new_best{};
     bool saved_start{},retry_available{},retry_active{};
     std::string retry_status;
+    // Lasting injuries: what is broken, which presets are on, the last heal.
+    std::string lasting_status = "Lasting injuries: none.";
     VisualEvents visual_events;
     VisualEvents normal_xray_events;
     std::string visual_save_status;
@@ -55,6 +58,8 @@ struct Snapshot {
 };
 // Presentation/console threads only queue controls and copy immutable snapshots.
 bool request(Action action) noexcept;
+// Heals every lasting injury at the next game tick, as a respawn would.
+void request_heal() noexcept;
 bool set_visual_options(const VisualOptions& options) noexcept;
 // Applies to the next attempt. The running challenge retains its own rules.
 bool set_challenge_config(const Config& config) noexcept;
