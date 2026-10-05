@@ -29,7 +29,8 @@ void saved_options() {
     check(decode_visual_options(encode_visual_options(options))==std::optional(options),
         "Reduced effects, timing and opacity survive together");
     check(!decode_visual_options("{}") && !decode_visual_options("{\"version\":2}"),"Missing and unsupported settings cannot replace defaults");
-    check(decode_visual_options(R"({"version":1,"visibility":0,"opacity":0.86,"flash":0.35,"impactSeconds":1.5,"reduced":false})")==std::optional(defaults),
+    auto original_defaults=defaults; original_defaults.normal_play=false; // saved before normal-play effects existed
+    check(decode_visual_options(R"({"version":1,"visibility":0,"opacity":0.86,"flash":0.35,"impactSeconds":1.5,"reduced":false})")==std::optional(original_defaults),
         "Original X-ray saves gain the new impact options without losing their saved settings");
     const auto encoded=encode_visual_options(options);
     auto before_fracture_filter=encoded;
@@ -358,7 +359,7 @@ void slow_motion_envelope() {
     check(!pulse.step(options,event,2200,true).active,"Reduced effects prevents automatic slow motion");
     options.reduced_effects=false;
     check(!pulse.step(options,event,2250,true).started,"Turning effects back on cannot replay an old contact");
-    event.latest_impact_ms=2500; event.latest_fracture=false; event.latest_severity=100;
+    event.latest_impact_ms=2500; event.latest_fracture=false; event.latest_severity=30;
     check(!pulse.step(options,event,2500,true).active,"Minor contacts do not slow normal skating");
     event.latest_impact_ms=2600; event.latest_severity=400;
     check(!pulse.step(options,event,2800,true).active,"A stale contact cannot trigger delayed slow motion");
@@ -572,7 +573,7 @@ void impact_camera_timing() {
         "Focus or mode cancellation cannot replay a previous camera impact when play resumes");
     options.reduced_effects=true; event.latest_impact_ms=2200;
     check(!pulse.step(options,event,2200,true).started_ms,"Reduced effects disables automatic camera response");
-    options.reduced_effects=false; event.latest_impact_ms=2300; event.latest_fracture=false; event.latest_severity=100;
+    options.reduced_effects=false; event.latest_impact_ms=2300; event.latest_fracture=false; event.latest_severity=30;
     check(!pulse.step(options,event,2300,true).started_ms,"Minor contacts cannot shake the normal skating camera");
 }
 int main() {

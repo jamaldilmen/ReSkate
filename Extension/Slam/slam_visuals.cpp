@@ -67,6 +67,8 @@ std::optional<VisualOptions> decode_visual_options(std::string_view text) noexce
             if (!doc.at("onlyImpacted").is_boolean()) return {};
             v.only_impacted=doc.at("onlyImpacted").get<bool>();
         }
+        // A save from before normal-play effects existed keeps them off: on is only the new default.
+        if (!doc.contains("normalPlay")) v.normal_play=false;
         if (doc.contains("normalPlay")) {
             if (!doc.at("normalPlay").is_boolean()) return {};
             v.normal_play=doc.at("normalPlay").get<bool>();

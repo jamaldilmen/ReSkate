@@ -1436,7 +1436,8 @@ void observe_skeleton(std::uintptr_t rig, float seconds, bool wipeout) noexcept 
             const auto previous_impacts=s.normal_xray.result().impacts;
             s.normal_xray.step(frame,GetTickCount64(),s.published.selected_config.scoring);
             if (s.normal_xray.result().impacts>previous_impacts)
-                logging::log(logging::Level::info,logging::Channel::skater,"Normal-play X-ray: {} impacts tracked this fall.",s.normal_xray.result().impacts);
+                logging::log(logging::Level::info,logging::Channel::skater,"Normal-play X-ray: {} impacts tracked this fall, hardest {:.1f} m/s, {} fractures.",
+                    s.normal_xray.result().impacts,s.normal_xray.result().largest_impact,s.normal_xray.result().fractures);
         }
         s.lasting.step(frame,static_cast<std::uint64_t>(watch.owner.entity),GetTickCount64());
         if (s.lasting.take_changed())

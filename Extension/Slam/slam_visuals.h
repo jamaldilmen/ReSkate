@@ -20,12 +20,12 @@ struct VisualOptions {
     std::string fracture_sound_path;
     bool slow_motion = true;
     float slow_motion_scale = .3f, slow_motion_seconds = .85f, slow_motion_hold = .45f;
-    float effect_severity = 225;
+    float effect_severity = 49; // 7 m/s
     bool player_zoom = true;
     float player_zoom_strength = .3f;
     float player_zoom_ease_seconds = .25f, player_follow_seconds = .12f;
     bool pass_out = true, pass_out_hud = true;
-    float pass_out_strength = .85f, pass_out_seconds = 1.6f, pass_out_severity = 400;
+    float pass_out_strength = .85f, pass_out_seconds = 1.6f, pass_out_severity = 144;
     float pass_out_redness = .15f;
     bool impact_camera = true;
     float impact_camera_strength = .65f;

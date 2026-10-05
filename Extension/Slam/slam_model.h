@@ -16,7 +16,9 @@ struct ScoreRules {
     float impact_rate = 10, fracture_bonus = 500;
     float fall_rate = 100, airtime_rate = 50, slide_rate = 25;
     float chain_step = .25f, chain_window_s = 1.5f;
-    float head_fracture = 160, limb_fracture = 225;
+    // Severity is the squared contact speed change (m/s). 64 = 8 m/s to the head, 100 = 10 m/s
+    // to a limb, about a 5 m drop: falls a skater takes every session, not only huge ones.
+    float head_fracture = 64, limb_fracture = 100;
     float bruise_threshold{};
     bool operator==(const ScoreRules&) const = default;
 };
